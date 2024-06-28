@@ -10,6 +10,7 @@ pub struct Node {
     all_ids: Vec<String>,
     message_count: usize,
     next_guid: usize,
+    broadcast_messages: Vec<usize>,
 }
 
 impl Node {
@@ -24,6 +25,7 @@ impl Node {
             all_ids: vec![],
             message_count: 0,
             next_guid: usize::MAX,
+            broadcast_messages: vec![],
         };
         node.respond(writer, message)?;
         Ok(node)
@@ -90,6 +92,14 @@ impl Node {
                 self.next_guid += self.all_ids.len();
                 Ok(Response::GenerateOk { id: self.next_guid })
             }
+            Request::Broadcast { message } => {
+                self.broadcast_messages.push(message);
+                Ok(Response::BroadcastOk)
+            }
+            Request::Read => Ok(Response::ReadOk {
+                messages: self.broadcast_messages.clone(),
+            }),
+            Request::Topology { topology: _ } => Ok(Response::TopologyOk),
         }
     }
 }

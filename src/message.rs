@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +37,13 @@ pub enum Request {
         echo: String,
     },
     Generate,
+    Broadcast {
+        message: usize,
+    },
+    Read,
+    Topology {
+        topology: HashMap<String, Vec<String>>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,4 +53,7 @@ pub enum Response {
     InitOk,
     EchoOk { echo: String },
     GenerateOk { id: usize },
+    BroadcastOk,
+    ReadOk { messages: Vec<usize> },
+    TopologyOk,
 }
