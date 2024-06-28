@@ -1,6 +1,6 @@
 use std::io;
 
-use anyhow::Ok;
+use anyhow::{Context, Ok, Result};
 
 use crate::message::{Body, Message, Request, Response};
 
@@ -13,7 +13,7 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn new(writer: &mut impl io::Write, message: Message<Request>) -> anyhow::Result<Self> {
+    pub fn new(writer: &mut impl io::Write, message: Message<Request>) -> Result<Self> {
         assert!(
             matches!(message.body.payload, Request::Init { .. }),
             "first message should have type 'init'"
@@ -33,8 +33,8 @@ impl Node {
         &mut self,
         writer: &mut impl io::Write,
         request: Message<Request>,
-    ) -> anyhow::Result<()> {
-        let response = self.response_message(request);
+    ) -> Result<()> {
+        let response = self.response_message(request)?;
         serde_json::to_writer(&mut *writer, &response)?;
         writer.write(b"\n")?;
         writer.flush()?;
@@ -42,46 +42,53 @@ impl Node {
         Ok(())
     }
 
-    fn response_message(&mut self, request_message: Message<Request>) -> Message<Response> {
+    fn response_message(&mut self, request_message: Message<Request>) -> Result<Message<Response>> {
         let Message {
             source,
             destination,
             body,
         } = request_message;
-        Message {
+        Ok(Message {
             source: destination,
             destination: source,
-            body: self.response_body(body),
-        }
+            body: self.response_body(body)?,
+        })
     }
 
-    fn response_body(&mut self, request_body: Body<Request>) -> Body<Response> {
+    fn response_body(&mut self, request_body: Body<Request>) -> Result<Body<Response>> {
         let Body {
             message_id,
             payload: request,
             ..
         } = request_body;
-        Body {
+        Ok(Body {
             message_id: Some(self.message_count),
             request_id: message_id,
-            payload: self.response(request),
-        }
+            payload: self.response(request)?,
+        })
     }
 
-    fn response(&mut self, request: Request) -> Response {
+    fn response(&mut self, request: Request) -> Result<Response> {
         match request {
-            Request::Init { node_id, node_ids } => {
+            Request::Init {
+                node_id,
+                mut node_ids,
+            } => {
+                node_ids.sort_unstable();
+                let index = node_ids
+                    .iter()
+                    .position(|id| id == &node_id)
+                    .context("node id should be in the list of all ids")?;
+
                 self.id = node_id;
                 self.all_ids = node_ids;
-                self.all_ids.sort_unstable();
-                self.next_guid = self.all_ids.iter().position(|id| id == &self.id).unwrap();
-                Response::InitOk
+                self.next_guid = index;
+                Ok(Response::InitOk)
             }
-            Request::Echo { echo } => Response::EchoOk { echo },
+            Request::Echo { echo } => Ok(Response::EchoOk { echo }),
             Request::Generate => {
-                let guid = self.next_guid;
                 self.next_guid += self.all_ids.len();
-                Response::GenerateOk { id: guid }
+                Ok(Response::GenerateOk { id: self.next_guid })
             }
         }
     }
