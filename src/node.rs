@@ -74,7 +74,7 @@ impl<Output: Write> Node<Output> {
                     .context("node id should be in the list of all ids")?;
 
                 self.id = node_id;
-                self.all_node_ids = node_ids.clone();
+                self.all_node_ids.clone_from(&node_ids);
                 self.next_guid = index;
                 self.neighbors = node_ids;
                 Ok(Some(Payload::InitOk))
@@ -130,13 +130,13 @@ impl<Output: Write> Node<Output> {
 
     fn send(&mut self, message: &Message) -> Result<()> {
         serde_json::to_writer(&mut self.output, message)?;
-        self.output.write(b"\n")?;
+        self.output.write_all(b"\n")?;
         self.output.flush()?;
         Ok(())
     }
 
     fn next_message_id(&mut self) -> usize {
         self.next_message_id += 1;
-        return self.next_message_id;
+        self.next_message_id
     }
 }
