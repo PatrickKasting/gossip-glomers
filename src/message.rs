@@ -1,20 +1,20 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Message<Payload> {
+pub struct Message {
     #[serde(rename = "src")]
     pub source: String,
 
     #[serde(rename = "dest")]
     pub destination: String,
 
-    pub body: Body<Payload>,
+    pub body: Body,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Body<Payload> {
+pub struct Body {
     #[serde(rename = "msg_id")]
     pub message_id: Option<usize>,
 
@@ -28,7 +28,7 @@ pub struct Body<Payload> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
-pub enum Request {
+pub enum Payload {
     Init {
         node_id: String,
         node_ids: Vec<String>,
@@ -44,16 +44,17 @@ pub enum Request {
     Topology {
         topology: HashMap<String, Vec<String>>,
     },
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-#[serde(rename_all = "snake_case")]
-pub enum Response {
     InitOk,
-    EchoOk { echo: String },
-    GenerateOk { id: usize },
+    EchoOk {
+        echo: String,
+    },
+    GenerateOk {
+        id: usize,
+    },
     BroadcastOk,
-    ReadOk { messages: Vec<usize> },
+    ReadOk {
+        messages: HashSet<usize>,
+    },
     TopologyOk,
 }

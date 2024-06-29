@@ -16,7 +16,7 @@ fn main() -> Result<()> {
 
     for message in stdin {
         let message = serde_json::from_str(&message?)?;
-        node.respond(&mut stdout, message)?;
+        node.handle(message)?;
     }
 
     Ok(())

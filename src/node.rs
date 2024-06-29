@@ -1,78 +1,69 @@
-use std::io;
+use std::{collections::HashSet, io::Write};
 
 use anyhow::{Context, Ok, Result};
 
-use crate::message::{Body, Message, Request, Response};
+use crate::message::{Body, Message, Payload};
 
 #[derive(Debug, Clone)]
-pub struct Node {
+pub struct Node<Output: Write> {
+    output: Output,
     id: String,
-    all_ids: Vec<String>,
-    message_count: usize,
+    all_node_ids: Vec<String>,
+    next_message_id: usize,
     next_guid: usize,
-    broadcast_messages: Vec<usize>,
+    broadcast_messages: HashSet<usize>,
+    neighbors: Vec<String>,
 }
 
-impl Node {
-    pub fn new(writer: &mut impl io::Write, message: Message<Request>) -> Result<Self> {
+impl<Output: Write> Node<Output> {
+    pub fn new(output: Output, init: Message) -> Result<Self> {
         assert!(
-            matches!(message.body.payload, Request::Init { .. }),
+            matches!(init.body.payload, Payload::Init { .. }),
             "first message should have type 'init'"
         );
 
         let mut node = Node {
+            output,
             id: String::new(),
-            all_ids: vec![],
-            message_count: 0,
+            all_node_ids: vec![],
+            next_message_id: 0,
             next_guid: usize::MAX,
-            broadcast_messages: vec![],
+            broadcast_messages: HashSet::new(),
+            neighbors: vec![],
         };
-        node.respond(writer, message)?;
+        node.handle(init)?;
         Ok(node)
     }
 
-    pub fn respond(
-        &mut self,
-        writer: &mut impl io::Write,
-        request: Message<Request>,
-    ) -> Result<()> {
-        let response = self.response_message(request)?;
-        serde_json::to_writer(&mut *writer, &response)?;
-        writer.write(b"\n")?;
-        writer.flush()?;
-        self.message_count += 1;
-        Ok(())
-    }
-
-    fn response_message(&mut self, request_message: Message<Request>) -> Result<Message<Response>> {
+    pub fn handle(&mut self, message: Message) -> Result<()> {
         let Message {
             source,
             destination,
-            body,
-        } = request_message;
-        Ok(Message {
-            source: destination,
-            destination: source,
-            body: self.response_body(body)?,
-        })
+            body:
+                Body {
+                    message_id,
+                    payload,
+                    ..
+                },
+        } = message;
+        if let Some(payload) = self.response(payload)? {
+            let response = Message {
+                source: destination,
+                destination: source,
+                body: Body {
+                    message_id: Some(self.next_message_id()),
+                    request_id: message_id,
+                    payload,
+                },
+            };
+            self.send(&response)?;
+        }
+        Ok(())
     }
 
-    fn response_body(&mut self, request_body: Body<Request>) -> Result<Body<Response>> {
-        let Body {
-            message_id,
-            payload: request,
-            ..
-        } = request_body;
-        Ok(Body {
-            message_id: Some(self.message_count),
-            request_id: message_id,
-            payload: self.response(request)?,
-        })
-    }
-
-    fn response(&mut self, request: Request) -> Result<Response> {
+    fn response(&mut self, request: Payload) -> Result<Option<Payload>> {
         match request {
-            Request::Init {
+            Payload::Init {
                 node_id,
                 mut node_ids,
             } => {
@@ -83,23 +74,69 @@ impl Node {
                     .context("node id should be in the list of all ids")?;
 
                 self.id = node_id;
-                self.all_ids = node_ids;
+                self.all_node_ids = node_ids.clone();
                 self.next_guid = index;
-                Ok(Response::InitOk)
+                self.neighbors = node_ids;
+                Ok(Some(Payload::InitOk))
             }
-            Request::Echo { echo } => Ok(Response::EchoOk { echo }),
-            Request::Generate => {
-                self.next_guid += self.all_ids.len();
-                Ok(Response::GenerateOk { id: self.next_guid })
+            Payload::Echo { echo } => Ok(Some(Payload::EchoOk { echo })),
+            Payload::Generate => {
+                self.next_guid += self.all_node_ids.len();
+                Ok(Some(Payload::GenerateOk { id: self.next_guid }))
             }
-            Request::Broadcast { message } => {
-                self.broadcast_messages.push(message);
-                Ok(Response::BroadcastOk)
+            Payload::Broadcast { message } => {
+                if self.broadcast_messages.insert(message) {
+                    self.broadcast_to_neighbors(message)?;
+                }
+                Ok(Some(Payload::BroadcastOk))
             }
-            Request::Read => Ok(Response::ReadOk {
+            Payload::Read => Ok(Some(Payload::ReadOk {
                 messages: self.broadcast_messages.clone(),
-            }),
-            Request::Topology { topology: _ } => Ok(Response::TopologyOk),
+            })),
+            Payload::Topology { mut topology } => {
+                self.neighbors = topology
+                    .remove(&self.id)
+                    .context("this node should appear in the topology")?;
+                Ok(Some(Payload::TopologyOk))
+            }
+            Payload::InitOk
+            | Payload::EchoOk { .. }
+            | Payload::GenerateOk { .. }
+            | Payload::BroadcastOk
+            | Payload::ReadOk { .. }
+            | Payload::TopologyOk => Ok(None),
         }
+    }
+
+    fn broadcast_to_neighbors(&mut self, message: usize) -> Result<()> {
+        for neighbor in self.neighbors.clone() {
+            let message = self.request(&neighbor, Payload::Broadcast { message });
+            self.send(&message)?;
+        }
+        Ok(())
+    }
+
+    fn request(&mut self, destination: &str, payload: Payload) -> Message {
+        Message {
+            source: self.id.clone(),
+            destination: destination.to_owned(),
+            body: Body {
+                message_id: Some(self.next_message_id()),
+                request_id: None,
+                payload,
+            },
+        }
+    }
+
+    fn send(&mut self, message: &Message) -> Result<()> {
+        serde_json::to_writer(&mut self.output, message)?;
+        self.output.write(b"\n")?;
+        self.output.flush()?;
+        Ok(())
+    }
+
+    fn next_message_id(&mut self) -> usize {
+        self.next_message_id += 1;
+        return self.next_message_id;
     }
 }
