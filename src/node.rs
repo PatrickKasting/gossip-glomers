@@ -46,7 +46,7 @@ impl<Output: Write> Node<Output> {
                     ..
                 },
         } = message;
-        if let Some(payload) = self.response(payload)? {
+        if let Some(payload) = self.response(payload, &source)? {
             let response = Message {
                 source: destination,
                 destination: source,
@@ -61,7 +61,7 @@ impl<Output: Write> Node<Output> {
         Ok(())
     }
 
-    fn response(&mut self, request: Payload) -> Result<Option<Payload>> {
+    fn response(&mut self, request: Payload, source: &str) -> Result<Option<Payload>> {
         match request {
             Payload::Init {
                 node_id,
@@ -86,7 +86,7 @@ impl<Output: Write> Node<Output> {
             }
             Payload::Broadcast { message } => {
                 if self.broadcast_messages.insert(message) {
-                    self.broadcast_to_neighbors(message)?;
+                    self.broadcast_to_neighbors(message, source)?;
                 }
                 Ok(Some(Payload::BroadcastOk))
             }
@@ -108,8 +108,13 @@ impl<Output: Write> Node<Output> {
         }
     }
 
-    fn broadcast_to_neighbors(&mut self, message: usize) -> Result<()> {
-        for neighbor in self.neighbors.clone() {
+    pub fn broadcast_to_neighbors(&mut self, message: usize, exception: &str) -> Result<()> {
+        let destinations = self
+            .neighbors
+            .clone()
+            .into_iter()
+            .filter(|neighbor| *neighbor != exception);
+        for neighbor in destinations {
             let message = self.request(&neighbor, Payload::Broadcast { message });
             self.send(&message)?;
         }
