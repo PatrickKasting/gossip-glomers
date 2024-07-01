@@ -3,54 +3,47 @@ mod node;
 
 use std::{
     io::{self, BufRead},
-    sync::mpsc,
     thread,
 };
 
-use anyhow::{Context, Error, Ok, Result};
+use anyhow::Context;
+
 use message::Message;
 use node::Node;
 
-enum Event {
-    Message(Message),
-    Broadcast(usize, String),
-    Shutdown,
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let (stdin_sender, mut stdin_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let stdin_thread = spawn_stdin_thread(stdin_sender)?;
+    let mut node = node(&mut stdin_receiver).await?;
+    while let Some(message) = stdin_receiver.recv().await {
+        node.handle(message)?;
+    }
+    stdin_thread
+        .join()
+        .expect("thread should be finished because the receiver is closed")?;
+    anyhow::Ok(())
 }
 
-fn main() -> Result<()> {
-    let mut node = node()?;
-
-    let (sender, receiver) = mpsc::channel();
-
-    let stdin = move || -> Result<()> {
+fn spawn_stdin_thread(
+    sender: tokio::sync::mpsc::UnboundedSender<Message>,
+) -> Result<thread::JoinHandle<anyhow::Result<(), anyhow::Error>>, io::Error> {
+    let task = move || -> anyhow::Result<()> {
         for message in io::stdin().lock().lines() {
             let message = serde_json::from_str(&message?)?;
-            sender.send(Event::Message(message))?;
+            sender.send(message)?;
         }
-        sender.send(Event::Shutdown)?;
         Ok(())
     };
-    let stdin = thread::Builder::new()
-        .name("stdin".to_owned())
-        .spawn(stdin)?;
-
-    for event in receiver {
-        match event {
-            Event::Message(message) => node.handle(message)?,
-            Event::Broadcast(message, sender) => node.broadcast_to_neighbors(message, &sender)?,
-            Event::Shutdown => break,
-        }
-    }
-
-    stdin
-        .join()
-        .expect("thread 'stdin' should join with main thread")?;
-    Ok(())
+    thread::Builder::new().name("stdin".to_owned()).spawn(task)
 }
 
-fn node() -> Result<Node<io::StdoutLock<'static>>, Error> {
-    let mut stdin = io::stdin().lock().lines();
-    let initial_message = stdin.next().context("first message should be readable")??;
-    let initial_message = serde_json::from_str(&initial_message)?;
-    Ok(Node::new(io::stdout().lock(), initial_message)?)
+async fn node(
+    receiver: &mut tokio::sync::mpsc::UnboundedReceiver<Message>,
+) -> anyhow::Result<Node<io::StdoutLock<'static>>, anyhow::Error> {
+    let first_message = receiver
+        .recv()
+        .await
+        .context("first message should be readable")?;
+    Node::new(io::stdout().lock(), first_message)
 }
