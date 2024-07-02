@@ -70,49 +70,62 @@ fn handle_request(request: Request, source: Id, request_id: message::Id) -> anyh
 
 fn response(request: Request, source: &Id) -> anyhow::Result<Response> {
     match request {
-        Request::Init {
-            node_id,
-            mut node_ids,
-        } => {
-            node_ids.sort_unstable();
-            let index = node_ids
-                .iter()
-                .position(|other| other == &node_id)
-                .context("node id should be in the list of ids")?;
-
-            ID.get_or_init(|| node_id);
-            ALL_IDS.get_or_init(|| node_ids);
-            NEXT_GUID.store(index, Ordering::Relaxed);
-
-            anyhow::Ok(Response::Init)
-        }
-        Request::Echo { echo } => anyhow::Ok(Response::Echo { echo }),
-        Request::Generate => {
-            let number_of_nodes = all_ids()?.len();
-            let guid = NEXT_GUID.fetch_add(number_of_nodes, Ordering::Relaxed);
-            anyhow::Ok(Response::Generate { id: guid })
-        }
-        Request::Broadcast { message } => {
-            if broadcast_messages_received().insert(message) {
-                let destinations = neighbors()?
-                    .iter()
-                    .filter(|&neighbor| neighbor != source)
-                    .cloned();
-                send_request_multiple_destinations(&Request::Broadcast { message }, destinations)?;
-            };
-            anyhow::Ok(Response::Broadcast)
-        }
-        Request::Read => anyhow::Ok(Response::Read {
-            messages: broadcast_messages_received().clone(),
-        }),
-        Request::Topology { mut topology } => {
-            let neighbors = topology
-                .remove(id()?)
-                .context("node id should appear as key in received topology")?;
-            NEIGHBORS.get_or_init(|| neighbors);
-            anyhow::Ok(Response::Topology)
-        }
+        Request::Init { node_id, node_ids } => response_to_init(node_id, node_ids),
+        Request::Echo { echo } => response_to_echo(echo),
+        Request::Generate => response_to_generate(),
+        Request::Broadcast { message } => response_to_broadcast(message, source),
+        Request::Read => response_to_read(),
+        Request::Topology { topology } => response_to_topology(topology),
     }
+}
+
+fn response_to_init(id: Id, mut all_ids: Vec<Id>) -> anyhow::Result<Response> {
+    all_ids.sort_unstable();
+    let index = all_ids
+        .iter()
+        .position(|other| other == &id)
+        .context("node id should be in the list of ids")?;
+
+    ID.get_or_init(|| id);
+    ALL_IDS.get_or_init(|| all_ids);
+    NEXT_GUID.store(index, Ordering::Relaxed);
+
+    anyhow::Ok(Response::Init)
+}
+
+fn response_to_echo(message: String) -> anyhow::Result<Response> {
+    anyhow::Ok(Response::Echo { echo: message })
+}
+
+fn response_to_generate() -> anyhow::Result<Response> {
+    let number_of_nodes = all_ids()?.len();
+    let guid = NEXT_GUID.fetch_add(number_of_nodes, Ordering::Relaxed);
+    anyhow::Ok(Response::Generate { id: guid })
+}
+
+fn response_to_broadcast(message: BroadcastMessage, source: &Id) -> anyhow::Result<Response> {
+    if broadcast_messages_received().insert(message) {
+        let destinations = neighbors()?
+            .iter()
+            .filter(|&neighbor| neighbor != source)
+            .cloned();
+        send_request_multiple_destinations(&Request::Broadcast { message }, destinations)?;
+    };
+    anyhow::Ok(Response::Broadcast)
+}
+
+fn response_to_read() -> anyhow::Result<Response> {
+    anyhow::Ok(Response::Read {
+        messages: broadcast_messages_received().clone(),
+    })
+}
+
+fn response_to_topology(mut topology: HashMap<Id, Vec<Id>>) -> anyhow::Result<Response> {
+    let neighbors = topology
+        .remove(id()?)
+        .context("node id should appear as key in received topology")?;
+    NEIGHBORS.get_or_init(|| neighbors);
+    anyhow::Ok(Response::Topology)
 }
 
 fn send_request_multiple_destinations(
