@@ -11,14 +11,18 @@ use std::{
 use anyhow::Context;
 use once_cell::sync::Lazy;
 
-use crate::message::{Body, BroadcastMessage, Message, MessageId, NodeId, Request, Response};
+use crate::message::{self, Body, Message, Request, Response};
+
+pub type Id = String;
+pub type Guid = usize;
+pub type BroadcastMessage = usize;
 
 type RequestHandle = tokio::task::JoinHandle<anyhow::Result<()>>;
 
-static NODE_ID: OnceLock<NodeId> = OnceLock::new();
-static ALL_NODE_IDS: OnceLock<Vec<NodeId>> = OnceLock::new();
+static ID: OnceLock<Id> = OnceLock::new();
+static ALL_IDS: OnceLock<Vec<Id>> = OnceLock::new();
 static NEXT_MESSAGE_ID: AtomicUsize = AtomicUsize::new(0);
-static ONGOING_REQUESTS: Lazy<Mutex<HashMap<MessageId, RequestHandle>>> =
+static ONGOING_REQUESTS: Lazy<Mutex<HashMap<message::Id, RequestHandle>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 static NEXT_GUID: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -26,7 +30,7 @@ static NEXT_GUID: AtomicUsize = AtomicUsize::new(usize::MAX);
 static BROADCAST_MESSAGES_RECEIVED: Lazy<Mutex<HashSet<BroadcastMessage>>> =
     Lazy::new(|| Mutex::new(HashSet::new()));
 
-static NEIGHBORS: OnceLock<Vec<NodeId>> = OnceLock::new();
+static NEIGHBORS: OnceLock<Vec<Id>> = OnceLock::new();
 
 pub async fn run(mut message_receiver: tokio::sync::mpsc::UnboundedReceiver<String>) {
     while let Some(message) = message_receiver.recv().await {
@@ -40,23 +44,23 @@ pub async fn run(mut message_receiver: tokio::sync::mpsc::UnboundedReceiver<Stri
 fn handle_message(message: Message) -> anyhow::Result<()> {
     let Message { source, body, .. } = message;
     match body {
-        Body::Request { id, request } => handle_request(source, id, request),
+        Body::Request { request, id } => handle_request(request, source, id),
         Body::Response {
+            response,
             id,
             request_id,
-            response,
-        } => handle_response(source, id, request_id, response),
+        } => handle_response(&response, &source, id, request_id),
     }
 }
 
-fn handle_request(source: NodeId, request_id: MessageId, request: Request) -> anyhow::Result<()> {
+fn handle_request(request: Request, source: Id, request_id: message::Id) -> anyhow::Result<()> {
     let response_body = Body::Response {
         id: next_message_id(),
         request_id,
         response: response(request, &source)?,
     };
     let response_message = Message {
-        source: node_id()?.clone(),
+        source: id()?.clone(),
         destination: source,
         body: response_body,
     };
@@ -64,7 +68,7 @@ fn handle_request(source: NodeId, request_id: MessageId, request: Request) -> an
     anyhow::Ok(())
 }
 
-fn response(request: Request, source: &NodeId) -> anyhow::Result<Response> {
+fn response(request: Request, source: &Id) -> anyhow::Result<Response> {
     match request {
         Request::Init {
             node_id,
@@ -76,15 +80,15 @@ fn response(request: Request, source: &NodeId) -> anyhow::Result<Response> {
                 .position(|other| other == &node_id)
                 .context("node id should be in the list of ids")?;
 
-            NODE_ID.get_or_init(|| node_id);
-            ALL_NODE_IDS.get_or_init(|| node_ids);
+            ID.get_or_init(|| node_id);
+            ALL_IDS.get_or_init(|| node_ids);
             NEXT_GUID.store(index, Ordering::Relaxed);
 
             anyhow::Ok(Response::Init)
         }
         Request::Echo { echo } => anyhow::Ok(Response::Echo { echo }),
         Request::Generate => {
-            let number_of_nodes = all_node_ids()?.len();
+            let number_of_nodes = all_ids()?.len();
             let guid = NEXT_GUID.fetch_add(number_of_nodes, Ordering::Relaxed);
             anyhow::Ok(Response::Generate { id: guid })
         }
@@ -103,7 +107,7 @@ fn response(request: Request, source: &NodeId) -> anyhow::Result<Response> {
         }),
         Request::Topology { mut topology } => {
             let neighbors = topology
-                .remove(node_id()?)
+                .remove(id()?)
                 .context("node id should appear as key in received topology")?;
             NEIGHBORS.get_or_init(|| neighbors);
             anyhow::Ok(Response::Topology)
@@ -111,25 +115,9 @@ fn response(request: Request, source: &NodeId) -> anyhow::Result<Response> {
     }
 }
 
-fn handle_response(
-    source: NodeId,
-    response_id: MessageId,
-    request_id: MessageId,
-    response: Response,
-) -> anyhow::Result<()> {
-    stop_ongoing_request_if_exists(request_id);
-    anyhow::Ok(())
-}
-
-fn stop_ongoing_request_if_exists(request_id: usize) {
-    if let Some(task) = ongoing_requests().remove(&request_id) {
-        task.abort();
-    }
-}
-
 fn send_request_multiple_destinations(
     request: &Request,
-    destinations: impl IntoIterator<Item = NodeId>,
+    destinations: impl IntoIterator<Item = Id>,
 ) -> anyhow::Result<()> {
     for destination in destinations {
         send_request(request.clone(), destination)?;
@@ -152,12 +140,15 @@ const REPEAT_REQUEST_INTERVAL_MILLIS: u64 = 1000;
 
 async fn repeat_request(
     request: Request,
-    id: MessageId,
-    destination: NodeId,
+    request_id: message::Id,
+    destination: Id,
 ) -> anyhow::Result<()> {
-    let body = Body::Request { request, id };
+    let body = Body::Request {
+        request,
+        id: request_id,
+    };
     let message = Message {
-        source: node_id()?.clone(),
+        source: id()?.clone(),
         destination,
         body,
     };
@@ -169,6 +160,22 @@ async fn repeat_request(
     }
 }
 
+fn handle_response(
+    _response: &Response,
+    _source: &Id,
+    _response_id: message::Id,
+    request_id: message::Id,
+) -> anyhow::Result<()> {
+    stop_ongoing_request_if_exists(request_id);
+    anyhow::Ok(())
+}
+
+fn stop_ongoing_request_if_exists(request_id: message::Id) {
+    if let Some(task) = ongoing_requests().remove(&request_id) {
+        task.abort();
+    }
+}
+
 fn send_message(message: &Message) -> anyhow::Result<()> {
     let mut stdout = std::io::stdout().lock();
     serde_json::to_writer(&mut stdout, message)?;
@@ -177,34 +184,35 @@ fn send_message(message: &Message) -> anyhow::Result<()> {
     anyhow::Ok(())
 }
 
-fn node_id() -> anyhow::Result<&'static String> {
-    NODE_ID
-        .get()
-        .context("initial message should have been received")
+fn id() -> anyhow::Result<&'static Id> {
+    ID.get()
+        .context("initial message with node id should have been received")
 }
 
-fn all_node_ids() -> anyhow::Result<&'static Vec<String>> {
-    ALL_NODE_IDS
+fn all_ids() -> anyhow::Result<&'static Vec<Id>> {
+    ALL_IDS
         .get()
-        .context("initial message should have been received")
+        .context("initial message with all node ids should have been received")
 }
 
-fn next_message_id() -> MessageId {
+fn next_message_id() -> message::Id {
     NEXT_MESSAGE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-fn ongoing_requests() -> std::sync::MutexGuard<'static, HashMap<usize, RequestHandle>> {
-    ONGOING_REQUESTS.lock().expect("mutex should be lockable")
+fn ongoing_requests() -> std::sync::MutexGuard<'static, HashMap<message::Id, RequestHandle>> {
+    ONGOING_REQUESTS
+        .lock()
+        .expect("ongoing-requests mutex should be lockable")
 }
 
-fn broadcast_messages_received() -> std::sync::MutexGuard<'static, HashSet<usize>> {
+fn broadcast_messages_received() -> std::sync::MutexGuard<'static, HashSet<BroadcastMessage>> {
     BROADCAST_MESSAGES_RECEIVED
         .lock()
-        .expect("mutex should be lockable")
+        .expect("broadcast-messages mutex should be lockable")
 }
 
-fn neighbors() -> anyhow::Result<&'static Vec<String>> {
+fn neighbors() -> anyhow::Result<&'static Vec<Id>> {
     NEIGHBORS
         .get()
-        .context("initial message should have been received")
+        .context("topology message with neighbors should have been received")
 }

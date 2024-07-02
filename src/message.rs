@@ -2,18 +2,17 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-pub type NodeId = String;
-pub type MessageId = usize;
-pub type BroadcastMessage = usize;
-pub type Guid = usize;
+use crate::node;
+
+pub type Id = usize;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     #[serde(rename = "src")]
-    pub source: NodeId,
+    pub source: node::Id,
 
     #[serde(rename = "dest")]
-    pub destination: NodeId,
+    pub destination: node::Id,
 
     pub body: Body,
 }
@@ -26,17 +25,17 @@ pub enum Body {
         request: Request,
 
         #[serde(rename = "msg_id")]
-        id: MessageId,
+        id: Id,
     },
     Response {
         #[serde(flatten)]
         response: Response,
 
         #[serde(rename = "msg_id")]
-        id: MessageId,
+        id: Id,
 
         #[serde(rename = "in_reply_to")]
-        request_id: MessageId,
+        request_id: Id,
     },
 }
 
@@ -45,19 +44,19 @@ pub enum Body {
 #[serde(rename_all = "snake_case")]
 pub enum Request {
     Init {
-        node_id: NodeId,
-        node_ids: Vec<NodeId>,
+        node_id: node::Id,
+        node_ids: Vec<node::Id>,
     },
     Echo {
         echo: String,
     },
     Generate,
     Broadcast {
-        message: BroadcastMessage,
+        message: node::BroadcastMessage,
     },
     Read,
     Topology {
-        topology: HashMap<NodeId, Vec<NodeId>>,
+        topology: HashMap<node::Id, Vec<node::Id>>,
     },
 }
 
@@ -71,13 +70,15 @@ pub enum Response {
     Echo { echo: String },
 
     #[serde(rename = "generate_ok")]
-    Generate { id: Guid },
+    Generate { id: node::Guid },
 
     #[serde(rename = "broadcast_ok")]
     Broadcast,
 
     #[serde(rename = "read_ok")]
-    Read { messages: HashSet<BroadcastMessage> },
+    Read {
+        messages: HashSet<node::BroadcastMessage>,
+    },
 
     #[serde(rename = "topology_ok")]
     Topology,

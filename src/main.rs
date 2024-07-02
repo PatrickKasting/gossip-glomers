@@ -2,7 +2,7 @@ mod message;
 mod node;
 
 use std::{
-    io::{self, stdout, BufRead, Write},
+    io::{self, BufRead},
     thread,
 };
 
