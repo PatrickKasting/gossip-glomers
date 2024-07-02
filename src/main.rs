@@ -1,22 +1,28 @@
 mod message;
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     io::{self, stdout, BufRead, Write},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Mutex, OnceLock,
     },
     thread,
+    time::Duration,
 };
 
 use anyhow::Context;
-use message::{Body, BroadcastMessage, Message, MessageId, NodeId, Request, Response};
 use once_cell::sync::Lazy;
+
+use message::{Body, BroadcastMessage, Message, MessageId, NodeId, Request, Response};
+
+type RequestHandle = tokio::task::JoinHandle<anyhow::Result<()>>;
 
 static NODE_ID: OnceLock<NodeId> = OnceLock::new();
 static ALL_NODE_IDS: OnceLock<Vec<NodeId>> = OnceLock::new();
 static NEXT_MESSAGE_ID: AtomicUsize = AtomicUsize::new(0);
+static ONGOING_REQUEST_TASKS: Lazy<Mutex<HashMap<MessageId, RequestHandle>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 static NEXT_GUID: AtomicUsize = AtomicUsize::new(usize::MAX);
 
@@ -70,7 +76,7 @@ fn handle_request(source: NodeId, request_id: MessageId, request: Request) -> an
         destination: source,
         body: response_body,
     };
-    send(&response_message)?;
+    send_message(&response_message)?;
     anyhow::Ok(())
 }
 
@@ -104,7 +110,7 @@ fn response(request: Request, source: &NodeId) -> anyhow::Result<Response> {
                     .iter()
                     .filter(|&neighbor| neighbor != source)
                     .cloned();
-                send_requests(Request::Broadcast { message }, destinations)?;
+                send_request_multiple_destinations(&Request::Broadcast { message }, destinations)?;
             };
             anyhow::Ok(Response::BroadcastOk)
         }
@@ -127,11 +133,18 @@ fn handle_response(
     request_id: MessageId,
     response: Response,
 ) -> anyhow::Result<()> {
-    todo!()
+    stop_ongoing_request_if_exists(request_id);
+    anyhow::Ok(())
 }
 
-fn send_requests(
-    request: Request,
+fn stop_ongoing_request_if_exists(request_id: usize) {
+    if let Some(task) = ongoing_request_tasks().remove(&request_id) {
+        task.abort();
+    }
+}
+
+fn send_request_multiple_destinations(
+    request: &Request,
     destinations: impl IntoIterator<Item = NodeId>,
 ) -> anyhow::Result<()> {
     for destination in destinations {
@@ -140,21 +153,39 @@ fn send_requests(
     anyhow::Ok(())
 }
 
-fn send_request(request: Request, destination: NodeId) -> anyhow::Result<()> {
-    let body = Body::Request {
-        request: request,
-        id: next_message_id(),
-    };
+fn send_request(request: Request, destination: String) -> anyhow::Result<()> {
+    let request_id = next_message_id();
+    let new_task = tokio::spawn(repeat_request(request, request_id, destination));
+    let existing_task = ongoing_request_tasks().insert(request_id, new_task);
+    assert!(
+        existing_task.is_none(),
+        "request id should not belong to already existing request"
+    );
+    anyhow::Ok(())
+}
+
+const REPEAT_REQUEST_INTERVAL_MILLIS: u64 = 1000;
+
+async fn repeat_request(
+    request: Request,
+    id: MessageId,
+    destination: NodeId,
+) -> anyhow::Result<()> {
+    let body = Body::Request { request, id };
     let message = Message {
         source: node_id()?.clone(),
         destination,
         body,
     };
-    send(&message)?;
-    anyhow::Ok(())
+
+    let mut interval = tokio::time::interval(Duration::from_millis(REPEAT_REQUEST_INTERVAL_MILLIS));
+    loop {
+        interval.tick().await;
+        send_message(&message)?;
+    }
 }
 
-fn send(message: &Message) -> anyhow::Result<()> {
+fn send_message(message: &Message) -> anyhow::Result<()> {
     let mut stdout = stdout().lock();
     serde_json::to_writer(&mut stdout, message)?;
     stdout.write_all(b"\n")?;
@@ -176,6 +207,12 @@ fn all_node_ids() -> anyhow::Result<&'static Vec<String>> {
 
 fn next_message_id() -> MessageId {
     NEXT_MESSAGE_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+fn ongoing_request_tasks() -> std::sync::MutexGuard<'static, HashMap<usize, RequestHandle>> {
+    ONGOING_REQUEST_TASKS
+        .lock()
+        .expect("mutex should be lockable")
 }
 
 fn broadcast_messages_received() -> std::sync::MutexGuard<'static, HashSet<usize>> {
