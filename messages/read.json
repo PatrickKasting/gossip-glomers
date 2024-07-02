@@ -1,0 +1,8 @@
+{
+    "src": "c1",
+    "dest": "n3",
+    "body": {
+        "type": "read",
+        "msg_id": 5
+    }
+}

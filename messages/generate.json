@@ -1,0 +1,8 @@
+{
+    "src": "c1",
+    "dest": "n3",
+    "body": {
+        "type": "generate",
+        "msg_id": 3
+    }
+}
