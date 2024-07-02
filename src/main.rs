@@ -96,13 +96,13 @@ fn response(request: Request, source: &NodeId) -> anyhow::Result<Response> {
             ALL_NODE_IDS.get_or_init(|| node_ids);
             NEXT_GUID.store(index, Ordering::Relaxed);
 
-            anyhow::Ok(Response::InitOk)
+            anyhow::Ok(Response::Init)
         }
-        Request::Echo { echo } => anyhow::Ok(Response::EchoOk { echo }),
+        Request::Echo { echo } => anyhow::Ok(Response::Echo { echo }),
         Request::Generate => {
             let number_of_nodes = all_node_ids()?.len();
             let guid = NEXT_GUID.fetch_add(number_of_nodes, Ordering::Relaxed);
-            anyhow::Ok(Response::GenerateOk { id: guid })
+            anyhow::Ok(Response::Generate { id: guid })
         }
         Request::Broadcast { message } => {
             if broadcast_messages_received().insert(message) {
@@ -112,9 +112,9 @@ fn response(request: Request, source: &NodeId) -> anyhow::Result<Response> {
                     .cloned();
                 send_request_multiple_destinations(&Request::Broadcast { message }, destinations)?;
             };
-            anyhow::Ok(Response::BroadcastOk)
+            anyhow::Ok(Response::Broadcast)
         }
-        Request::Read => anyhow::Ok(Response::ReadOk {
+        Request::Read => anyhow::Ok(Response::Read {
             messages: broadcast_messages_received().clone(),
         }),
         Request::Topology { mut topology } => {
@@ -122,7 +122,7 @@ fn response(request: Request, source: &NodeId) -> anyhow::Result<Response> {
                 .remove(node_id()?)
                 .context("node id should appear as key in received topology")?;
             NEIGHBORS.get_or_init(|| neighbors);
-            anyhow::Ok(Response::TopologyOk)
+            anyhow::Ok(Response::Topology)
         }
     }
 }

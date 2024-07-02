@@ -63,12 +63,22 @@ pub enum Request {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
-#[serde(rename_all = "snake_case")]
 pub enum Response {
-    InitOk,
-    EchoOk { echo: String },
-    GenerateOk { id: Guid },
-    BroadcastOk,
-    ReadOk { messages: HashSet<BroadcastMessage> },
-    TopologyOk,
+    #[serde(rename = "init_ok")]
+    Init,
+
+    #[serde(rename = "echo_ok")]
+    Echo { echo: String },
+
+    #[serde(rename = "generate_ok")]
+    Generate { id: Guid },
+
+    #[serde(rename = "broadcast_ok")]
+    Broadcast,
+
+    #[serde(rename = "read_ok")]
+    Read { messages: HashSet<BroadcastMessage> },
+
+    #[serde(rename = "topology_ok")]
+    Topology,
 }
