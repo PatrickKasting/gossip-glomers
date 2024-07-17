@@ -69,6 +69,7 @@ fn efficient_broadcast() {
         ["--time-limit", "20"],
         ["--rate", "100"],
         ["--latency", "100"],
+        ["--topology", "tree4"],
     ];
     let results = test(&configuration);
 
