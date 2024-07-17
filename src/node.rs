@@ -105,7 +105,7 @@ fn response_to_generate() -> anyhow::Result<Response> {
 
 fn response_to_broadcast(message: BroadcastMessage, source: &Id) -> anyhow::Result<Response> {
     if broadcast_messages_received().insert(message) {
-        let destinations = neighbors()?
+        let destinations = neighbors()
             .iter()
             .filter(|&neighbor| neighbor != source)
             .cloned();
@@ -224,8 +224,8 @@ fn broadcast_messages_received() -> std::sync::MutexGuard<'static, HashSet<Broad
         .expect("broadcast-messages mutex should be lockable")
 }
 
-fn neighbors() -> anyhow::Result<&'static Vec<Id>> {
+fn neighbors() -> &'static Vec<Id> {
     NEIGHBORS
         .get()
-        .context("topology message with neighbors should have been received")
+        .expect("topology message with neighbors should have been received")
 }
