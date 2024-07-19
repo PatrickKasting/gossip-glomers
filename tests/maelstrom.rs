@@ -53,9 +53,10 @@ fn multi_node_broadcast() {
 fn fault_tolerant_broadcast() {
     let configuration = [
         ["--workload", "broadcast"],
-        ["--node-count", "5"],
+        ["--node-count", "25"],
         ["--time-limit", "20"],
-        ["--rate", "10"],
+        ["--rate", "100"],
+        ["--latency", "100"],
         ["--nemesis", "partition"],
     ];
     test(&configuration);
